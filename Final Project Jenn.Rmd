@@ -1,0 +1,161 @@
+---
+title: "Final Project"
+author: "Jenn Halbleib"
+date: "November 13, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(rpart)
+library(purrr)
+```
+
+```{r}
+orders <- read.csv("orders.csv")
+products_prior <- read.csv("order_products__prior.csv")
+order_products_train <- read.csv("order_products__train.csv")
+products <- read.csv("products.csv")
+aisles <- read.csv("aisles.csv")
+departments <- read.csv("departments.csv")
+```
+
+#Making time based visualizations
+
+Most ordered product by hour (ignoring day of week)
+```{r}
+#Here, we join the orders by time with the products ordered for prior and train set orders
+prior <- products_prior %>% left_join(orders, by = "order_id")
+train <- order_products_train %>% left_join(orders, by = "order_id")
+#Joining the prior and training sets together
+orders_full <- rbind(train, prior)
+#Counting how many of each product is ordered in each hour
+by_hour_summary <- orders_full %>% group_by(order_hour_of_day, product_id) %>%
+  summarise(count = n())
+#Finding the most ordered product per hour and joining with product names
+by_hour_max <- by_hour_summary %>% group_by(order_hour_of_day) %>% filter(count == max(count)) %>% left_join(products, "product_id")
+#Graphing results
+ggplot(data=by_hour_max, aes(x=order_hour_of_day, y=count, fill=product_name)) +
+    geom_bar(stat="identity") + xlab("Hour of Day") + ylab("Count") + 
+  ggtitle("Most Ordered Product Per Hour") + guides(fill=guide_legend(title="Product"))
+```
+
+Most ordered product by day of week
+```{r}
+#Counting how many of each product is ordered each day (notice use 
+# of orders_full made above)
+by_day_summary <- orders_full %>% group_by(order_dow, product_id) %>%
+  summarise(count = n())
+#Finding the most ordered product per hour and joining with product names
+by_day_max <- by_day_summary %>% group_by(order_dow) %>% filter(count == max(count)) %>% left_join(products, "product_id")
+#Graphing results
+ggplot(data=by_day_max, aes(x=order_dow, y=count, fill=product_name)) +
+    geom_bar(stat="identity") + xlab("Day of Week") + ylab("Count") + 
+  ggtitle("Most Ordered Product Per Day") + guides(fill=guide_legend(title="Product"))
+```
+
+Most ordered by hour by day
+```{r}
+#Counting how many of each product is ordered each day by hour (notice use of 
+# orders_full made above)
+by_day_by_hour_summary <- orders_full %>% 
+  group_by(order_dow, order_hour_of_day, product_id) %>% 
+  summarise(count = n())
+#Finding the most ordered product each hour grouped by day
+by_day_by_hour_max <- by_day_by_hour_summary %>% 
+  group_by(order_dow, order_hour_of_day) %>% filter(count == max(count)) %>%
+  left_join(products, "product_id")
+#Didn't graph because it's still all bananas
+```
+
+Predicting banana for every order
+```{r}
+#test <- orders %>% filter(eval_set == "test")
+#test <- test %>% mutate(products = 24852)
+#test_to_submit <- test %>% select(order_id, products)
+#write.csv(test_to_submit, "submission.csv", row.names=FALSE)
+#Terrible Kaggle score (0.03) 
+```
+
+#Making frequency based visualizations
+
+50 most ordered products period
+```{r}
+#Tallying product orders
+most_ordered <- orders_full %>% group_by(product_id) %>% summarise(count = n()) 
+#Arranging by count
+most_ordered <- most_ordered %>% arrange(count) 
+#Subsetting the top 50 most frequently ordered products
+most_ordered <- most_ordered %>% top_n(50)
+#Joining with product names
+most_ordered <- most_ordered %>% left_join(products, "product_id") 
+most_ordered <- most_ordered %>% left_join(departments, "department_id")
+#Graphing results
+ggplot(data=most_ordered, aes(x=reorder(product_name, -count), y=count, fill = department)) + geom_bar(stat="identity") + coord_flip() + xlab("Product") + ylab("Count") + 
+  ggtitle("Fifty Most Ordered Products") + guides(fill=guide_legend(title = "Department"))+ scale_fill_brewer(palette="YlGn")
+```
+
+Most re-ordered products
+```{r}
+#Tallying product orders
+most_reordered <- orders_full %>% filter(reordered == 1) %>% group_by(product_id) %>% summarise(count = n()) 
+#Arranging by count
+most_reordered <- most_reordered %>% arrange(count) 
+#Subsetting the top 50 most frequently ordered products
+most_reordered <- most_reordered %>% top_n(50)
+#Joining with product names
+most_reordered <- most_reordered %>% left_join(products, "product_id") 
+most_reordered <- most_reordered %>% left_join(departments, "department_id")
+#Graphing results
+ggplot(data=most_reordered, aes(x=reorder(product_name, -count), y=count, fill = department)) + geom_bar(stat="identity") + coord_flip() + xlab("Product") + ylab("Count") + 
+  ggtitle("Fifty Most ReOrdered Products") + guides(fill=guide_legend(title = "Department"))+ scale_fill_brewer(palette="YlGn")
+```
+
+Making a CART tree per user for a small subset of train users
+```{r}
+#Making subset
+set.seed(76)
+train_subset <- train %>% sample_n(100)
+
+#Making function to find user id in prior and make tree based on those orders
+get_tree <- function(order_id_for_model){
+  #Save model formula
+  model_formula <- as.formula(as.factor(product_id) ~ order_number + order_dow + order_hour_of_day + days_since_prior_order + reordered)
+  
+  #Pulling user_id row from train_subset
+  train_for_model <- train_subset %>% filter(order_id == order_id_for_model)
+  
+  #Find user's order in set of prior orders
+  data_for_user <- prior %>% filter(user_id == train_for_model$user_id)
+  
+  #Make tree for user
+  model_CART <- rpart(model_formula, data = data_for_user)
+
+  
+  #Make predictions
+  y_hat <- model_CART %>% predict(newdata=train_for_model, type = "class")
+  return(y_hat %>% unlist() %>% as.character() %>% as.numeric())
+}
+
+order_id_vector_train_subset <- as_vector(train_subset$order_id)
+
+y_hat_train_subset1 <- rep(0,100)
+
+for(i in 1:100){
+  y_hat_train_subset1[i] <- get_tree(order_id_vector_train_subset[i])
+}
+
+#Finding raw number correct
+train_subset <- bind_cols(train_subset, data.frame(y_hat_train_subset1))
+num_correct <- train_subset %>% mutate(correct = ifelse(product_id == y_hat_train_subset1, 1, 0)) %>% summarise(count = sum(correct))
+
+#Question for Office Hours: F1 score calculation in this case?
+
+#False positive is the number wrong of the number in the cart
+#True positive is what you get right
+```
+
+Question moving forward:
+Do we make better frequency predictions when we have more data for users?
+
