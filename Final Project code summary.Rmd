@@ -1,0 +1,414 @@
+---
+title: "Instacart code summary"
+author: "Pei Gong,Jennifer Halbleib,Anthony Rentsch"
+date: "December 21st, 2017"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(stringr)
+library(rpart)
+library(purrr)
+library(igraph)
+```
+
+#Read in the data 
+```{r}
+orders <- read.csv("orders.csv")
+products_prior <- read.csv("order_products__prior.csv")
+order_products_train <- read.csv("order_products__train.csv")
+products <- read.csv("products.csv")
+aisles <- read.csv("aisles.csv")
+departments <- read.csv("departments.csv") 
+```
+
+#Exploratory data analysis 
+
+## Most ordered product by departments
+```{r}
+#Here, we join the orders by time with the products ordered for prior and train set orders
+prior <- products_prior %>% left_join(orders, by = "order_id")
+
+train <- order_products_train %>% left_join(orders, by = "order_id")
+#Joining the prior and training sets together
+orders_full <- rbind(train, prior) 
+
+products <- products %>% 
+    mutate(organic=ifelse(str_detect(str_to_lower(products$product_name),'organic'),1,0), organic= as.factor(organic)) 
+
+orders_1<-orders_full %>% left_join(products, "product_id") 
+ 
+by_user_summary<-orders_1 %>% group_by(user_id,product_name) 
+
+by_department_summary <- orders_1 %>% group_by(department_id, product_name) %>%
+  summarise(count = n())
+#Finding the most ordered product per hour and joining with product names
+by_department_max <- by_department_summary %>% group_by(department_id) %>% filter(count == max(count)) %>%  left_join(departments, "department_id")
+department1<-by_department_max[,c(2,4)]
+```
+
+## Most ordered product by aisle
+
+```{r}
+#Counting how many of each product is ordered each day (notice use 
+# of orders_full made above)
+by_aisle_summary <- orders_1 %>% group_by(aisle_id, product_name) %>%
+  summarise(count = n())
+#Finding the most ordered product per hour and joining with product names
+by_aisle_max <- by_aisle_summary %>% group_by(aisle_id) %>% filter(count == max(count)) %>% left_join(aisles, "aisle_id")
+by_aisle1<-by_aisle_max[,c(2,4)]
+```
+
+##Most ordered product by hour (ignoring day of week)
+```{r}
+#Here, we join the orders by time with the products ordered for prior and train set orders
+prior <- products_prior %>% left_join(orders, by = "order_id")
+train <- order_products_train %>% left_join(orders, by = "order_id")
+#Joining the prior and training sets together
+orders_full <- rbind(train, prior)
+#Counting how many of each product is ordered in each hour
+by_hour_summary <- orders_full %>% group_by(order_hour_of_day, product_id) %>%
+  summarise(count = n())
+#Finding the most ordered product per hour and joining with product names
+by_hour_max <- by_hour_summary %>% group_by(order_hour_of_day) %>% filter(count == max(count)) %>% left_join(products, "product_id")
+#Graphing results
+ggplot(data=by_hour_max, aes(x=order_hour_of_day, y=count, fill=product_name)) +
+    geom_bar(stat="identity") + xlab("Hour of Day") + ylab("Count") + 
+  ggtitle("Most Ordered Product Per Hour") + guides(fill=guide_legend(title="Product"))
+```
+
+## Most ordered product by day of week
+```{r}
+#Counting how many of each product is ordered each day (notice use 
+# of orders_full made above)
+by_day_summary <- orders_full %>% group_by(order_dow, product_id) %>%
+  summarise(count = n())
+#Finding the most ordered product per hour and joining with product names
+by_day_max <- by_day_summary %>% group_by(order_dow) %>% filter(count == max(count)) %>% left_join(products, "product_id")
+#Graphing results
+ggplot(data=by_day_max, aes(x=order_dow, y=count, fill=product_name)) +
+    geom_bar(stat="identity") + xlab("Day of Week") + ylab("Count") + 
+  ggtitle("Most Ordered Product Per Day") + guides(fill=guide_legend(title="Product"))
+```
+
+## Most ordered by hour by day
+```{r}
+#Counting how many of each product is ordered each day by hour (notice use of 
+# orders_full made above)
+by_day_by_hour_summary <- orders_full %>% 
+  group_by(order_dow, order_hour_of_day, product_id) %>% 
+  summarise(count = n())
+#Finding the most ordered product each hour grouped by day
+by_day_by_hour_max <- by_day_by_hour_summary %>% 
+  group_by(order_dow, order_hour_of_day) %>% filter(count == max(count)) %>%
+  left_join(products, "product_id")
+#Didn't graph because it's still all bananas
+```
+
+## Making frequency based visualizations
+
+20 most ordered products period
+```{r}
+#Tallying product orders
+most_ordered <- orders_full %>% group_by(product_id) %>% summarise(count = n()) 
+#Arranging by count
+most_ordered <- most_ordered %>% arrange(count) 
+#Subsetting the top 50 most frequently ordered products
+most_ordered <- most_ordered %>% top_n(20)
+#Joining with product names
+most_ordered <- most_ordered %>% left_join(products, "product_id") 
+most_ordered <- most_ordered %>% left_join(departments, "department_id")
+#Graphing results
+ggplot(data=most_ordered, aes(x=reorder(product_name, -count), y=count, fill = department)) + geom_bar(stat="identity") + coord_flip() + xlab("Product") + ylab("Count") + 
+  ggtitle("20 Most Ordered Products") + guides(fill=guide_legend(title = "Department"))+ scale_fill_brewer(palette="YlGn")
+```
+
+## Most re-ordered products
+```{r}
+#Tallying product orders
+most_reordered <- orders_full %>% filter(reordered == 1) %>% group_by(product_id) %>% summarise(count = n()) 
+#Arranging by count
+most_reordered <- most_reordered %>% arrange(count) 
+#Subsetting the top 50 most frequently ordered products
+most_reordered <- most_reordered %>% top_n(20)
+#Joining with product names
+most_reordered <- most_reordered %>% left_join(products, "product_id") 
+most_reordered <- most_reordered %>% left_join(departments, "department_id")
+#Graphing results
+ggplot(data=most_reordered, aes(x=reorder(product_name, -count), y=count, fill = department)) + geom_bar(stat="identity") + coord_flip() + xlab("Product") + ylab("Count") + 
+  ggtitle("20 Most ReOrdered Products") + guides(fill=guide_legend(title = "Department"))+ scale_fill_brewer(palette="YlGn")
+```
+
+## Predicting banana for every order
+```{r}
+test <- orders %>% filter(eval_set == "test")
+test <- test %>% mutate(products = 24852)
+test_to_submit <- test %>% select(order_id, products)
+write.csv(test_to_submit, "submission.csv", row.names=FALSE)
+```
+
+## Predict that an individual will order the item they have ordered most
+
+First, look at what the maximum number of times a user has ordered the same product.
+
+```{r}
+orders_full %>% group_by(user_id) %>% count(product_id) %>% summarise(max_orders = max(n)) %>% 
+  ggplot() +
+  geom_histogram(aes(x = max_orders), fill = "green4") +
+  labs(x = "Maximum number of times a user has ordered the same product",
+       title = "")
+#ggsave("max_reorders.png")
+```
+
+Now predict the next product that a user will order is product that each user has ordered most.
+
+```{r}
+max_ordered_product <- orders_full %>% group_by(user_id) %>% 
+  count(product_id) 
+max_ordered_product <- max_ordered_product %>% filter(n == max(n))
+
+# predict; when a user has multiple products tied for most ordered, break at random
+test <- orders %>% filter(eval_set == "test") %>% left_join(max_ordered_product, by = "user_id") 
+test <- test %>% group_by(user_id) %>% sample_n(1) %>% ungroup()
+  
+test <- test %>% select(order_id, product_id) %>% rename(products = product_id)
+write_csv(test, "max_previously_ordered.csv")
+```
+
+Kaggle F1 score: 0.1632167. 
+
+
+Now retry but guessing top 2 items.
+
+```{r}
+# set up data frame to use to predict 2 or more products
+max_ordered_product2 <- orders_full %>% group_by(user_id) %>% 
+  count(product_id) %>% top_n(2, wt = n)
+max_ordered_product2 <- max_ordered_product2 %>% select(-n)
+max_ordered_product_2_ormore <- max_ordered_product2 %>% mutate(row = row_number()) %>% 
+  spread(row, product_id)
+
+test2 <- orders %>% filter(eval_set == "test") %>% left_join(max_ordered_product_2_ormore, by = "user_id")
+test2 <- test2 %>% select(order_id, '1', '2')
+  
+test2 <- within(test2, x <- paste(test2$`1`,test2$`2`,sep=' ')) %>% rename(order_id = order_id, products = x) %>% 
+  select(order_id, products)
+write_csv(test2, "max_previously_ordered_2.csv")
+```
+
+Top 3 items.
+
+```{r}
+test3 <- orders %>% filter(eval_set == "test") %>% left_join(max_ordered_product_2_ormore, by = "user_id")
+test3 <- test3 %>% select(order_id, '1', '2', '3')
+test3$`3`[is.na(test3$`3`)] <- ""
+  
+test3 <- within(test3, x <- paste(test3$`1`,test3$`2`,test3$`3`,sep=' ')) %>% 
+  rename(order_id = order_id, products = x) %>% 
+  select(order_id, products)
+
+
+write_csv(test3, "max_previously_ordered_3.csv")
+```
+
+Top 4 items.
+
+```{r}
+test4 <- orders %>% filter(eval_set == "test") %>% left_join(max_ordered_product_2_ormore, by = "user_id")
+test4 <- test4 %>% select(order_id, '1', '2', '3','4')
+test4$`3`[is.na(test4$`3`)] <- ""
+test4$`3`[is.na(test4$`4`)] <- ""
+  
+test4 <- within(test4, x <- paste(test4$`1`,test4$`2`,test4$`3`,test4$`4`,sep=' ')) %>% 
+  rename(order_id = order_id, products = x) %>% 
+  select(order_id, products)
+
+
+write_csv(test4, "max_previously_ordered_4.csv")
+
+```
+
+In conclusion, we have the kaggle score of the four models. 
+```{r}
+
+data.frame(Model = c("The next product a user will buy is the 1 product they have ordered most often",
+                     "The next products a user will buy are the 2 products they have ordered most often",
+                     "The next products a user will buy are the 3 products they have ordered most often",
+                     "The next products a user will buy are the 4 products they have ordered most often"),
+           'Kaggle F1 Score' = c(0.163, 0.219, 0.243, 0.215))
+```
+
+Predicting with CART tree for each user
+```{r}
+#Making function to find user id in prior and make tree based on those orders
+get_tree <- function(order_id_for_model, data){
+  #Save model formula
+  model_formula <- as.formula(as.factor(product_id) ~ order_number + order_dow + order_hour_of_day + days_since_prior_order)
+  
+  #Pulling user_id row from data
+  train_for_model <- data %>% filter(order_id == order_id_for_model)
+  
+  #Find user's order in set of prior orders
+  data_for_user <- prior %>% filter(user_id == train_for_model$user_id)
+  
+  #Make tree for user
+  model_CART <- rpart(model_formula, data = data_for_user)
+
+  #Make predictions
+  y_hat <- model_CART %>% predict(newdata=train_for_model, type = "class")
+  return(y_hat %>% unlist() %>% as.character() %>% as.numeric())
+}
+
+#Filtering out full test set from orders
+test <- orders %>% filter(eval_set == "test")
+
+#Finding users who have ordered only one product
+only_order_one <- prior %>% filter(user_id %in% unique(orders$user_id[orders$eval_set=="test"])) %>% group_by(user_id) %>% count(product_id) %>% mutate(ratio_n = n/sum(n)) %>% filter(ratio_n == 1)
+
+#Removing users who have ordered only one product from the test set
+test_subset <- test %>% filter(!user_id %in% only_order_one$user_id)
+#Making y-hat vector
+y_hat_test <- rep(0,rep(length(test_subset$user_id)))
+#Pulling order id's from test_subset for get_tree function
+order_id_vect_test <- as_vector(test_subset$order_id)
+
+#Getting y_hat for test_subset
+#Note to future user: This code takes about 6 hours to run for 75000 observations
+#submission_tree.csv has the results
+#Load to view
+#Uncomment code to run
+
+#for(i in 1:length(test_subset$user_id)){
+ #  tictoc::tic()
+  # y_hat_test[i] <- get_tree(order_id_vect_test[i], test_subset)
+  # tictoc::toc(quiet = FALSE)
+  # print(i)
+#}
+
+#Binding tree results to order number
+#tree_results <- data.frame(order_id_vect_test,y_hat_test)
+#tree_results <- tree_results %>% rename(order_id = order_id_vect_test)
+#tree_results <- tree_results %>% rename(products = y_hat_test)
+
+#Predict same product for only_order_one users
+#only_one <- test %>% filter(user_id %in% only_order_one$user_id) %>%
+#  inner_join(only_order_one)
+#only_one_predict <- data.frame(only_one$order_id, only_one$product_id)
+#only_one_predict <- only_one_predict %>% rename(products = only_one.product_id, order_id = only_one.order_id)
+
+#Combine tree predicts and only_order_one users
+#tree_results <- only_one_predict %>% bind_rows(tree_results)
+
+#Making submission .csv
+#write_csv(tree_results, "submission_tree.csv")
+
+#Kaggle score from this: 0 
+```
+
+# Network
+
+Here we consider that each product is a node. Each connection runs between products that are in the same order. 
+
+```{r}
+# create edgelist matrix for just 5 orders
+edgelist <- data.frame()
+
+set.seed(11)
+orders_full_small <- orders_full %>% 
+  filter(order_id %in% sample(orders_full$order_id, size = 5, replace = T)) %>% 
+  select(order_id, product_id)
+orders_full_small$order_id <- as.factor(orders_full_small$order_id)
+
+# Setting up edgelist matrix as a n x n matrix (n = 62)
+
+all_product_ids <- unique(orders_full_small$product_id)
+edgelist_matrix <- matrix(nrow = length(all_product_ids),
+                          ncol = length(all_product_ids),
+                          dimnames = list(all_product_ids, all_product_ids))
+
+for (x in levels(orders_full_small$order_id)){
+  for (i in rownames(edgelist_matrix)){
+    for (j in colnames(edgelist_matrix)){
+      if (i %in% unique(orders_full_small$product_id[orders_full_small$order_id == x])){
+        if (j %in% unique(orders_full_small$product_id[orders_full_small$order_id == x])){
+          edgelist_matrix[i,j] <- 1
+        }
+        else edgelist_matrix[i,j] <- 0
+      }
+    }
+  }
+}
+
+# rename rows
+rnames <- rownames(edgelist_matrix) %>% 
+  as.data.frame() %>% 
+  rename(product_id = '.') %>% 
+  mutate(product_id = as.integer(product_id)) %>% 
+  left_join(products, by = "product_id") %>% 
+  select(product_name)
+rnames <- rnames$product_name
+rnames <- as.character(rnames)
+
+rownames(edgelist_matrix) <- rnames
+
+# rename columns
+cnames <- colnames(edgelist_matrix) %>% 
+  as.data.frame() %>% 
+  rename(product_id = '.') %>% 
+  mutate(product_id = as.integer(product_id)) %>% 
+  left_join(products, by = "product_id") %>% 
+  select(product_name)
+cnames <- cnames$product_name
+cnames <- as.character(cnames)
+
+colnames(edgelist_matrix) <- cnames
+```
+
+What products do we have here?
+
+```{r}
+rownames(edgelist_matrix) %>% 
+  as.data.frame() %>% 
+  rename(product_id = '.') %>% 
+  mutate(product_id = as.integer(product_id)) %>% 
+  left_join(products, by = "product_id") %>% 
+  select(product_name)
+```
+
+## Visualize network
+
+```{r}
+igraph_adj_network <- graph_from_adjacency_matrix(edgelist_matrix, mode = "undirected", weighted = TRUE, add.colnames = 'label')
+
+# function borrowed from Stack Overflow
+# https://stackoverflow.com/questions/38999656/increasing-spaces-between-vertices-for-r-igraph
+layout.by.attr <- function(graph, wc, cluster.strength=1,layout=layout.auto) {  
+  g <- graph.edgelist(get.edgelist(graph)) # create a lightweight copy of graph w/o the attributes.
+  E(g)$weight <- 1
+  
+  attr <- cbind(id=1:vcount(g), val=wc)
+  g <- g + vertices(unique(attr[,2])) + igraph::edges(unlist(t(attr)), weight=cluster.strength)
+  
+  l <- layout(g, weights=E(g)$weight)[1:vcount(graph),]
+  return(l)
+}
+
+set.seed(9) # set seed because orientation of network changes each time
+plot(simplify(igraph_adj_network),
+     vertex.size = 5,
+     vertex.label = ifelse(degree(igraph_adj_network) > 30, V(igraph_adj_network)$label, NA),
+     vertex.label.cex = 1,
+     vertex.label.font = 2,
+     vertex.label.dist = 2,
+     vertex.label.color = "black",
+     vertex.color = "green4",
+     edge.color = "gray81",
+     layout=layout.by.attr(igraph_adj_network, wc=1))
+title("Network for 5 Instacart orders",
+      cex.main = 2)
+```
+
